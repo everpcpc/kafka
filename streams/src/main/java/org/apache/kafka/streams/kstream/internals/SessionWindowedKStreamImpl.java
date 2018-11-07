@@ -28,6 +28,7 @@ import org.apache.kafka.streams.kstream.Reducer;
 import org.apache.kafka.streams.kstream.SessionWindowedKStream;
 import org.apache.kafka.streams.kstream.SessionWindows;
 import org.apache.kafka.streams.kstream.Windowed;
+import org.apache.kafka.streams.kstream.WindowedSerdes;
 import org.apache.kafka.streams.kstream.internals.graph.StreamsGraphNode;
 import org.apache.kafka.streams.state.SessionBytesStoreSupplier;
 import org.apache.kafka.streams.state.SessionStore;
@@ -40,10 +41,8 @@ import java.util.Set;
 import static org.apache.kafka.streams.kstream.internals.KGroupedStreamImpl.AGGREGATE_NAME;
 import static org.apache.kafka.streams.kstream.internals.KGroupedStreamImpl.REDUCE_NAME;
 
-public class SessionWindowedKStreamImpl<K, V> extends AbstractStream<K> implements SessionWindowedKStream<K, V> {
+public class SessionWindowedKStreamImpl<K, V> extends AbstractStream<K, V> implements SessionWindowedKStream<K, V> {
     private final SessionWindows windows;
-    private final Serde<K> keySerde;
-    private final Serde<V> valSerde;
     private final GroupedStreamAggregateBuilder<K, V> aggregateBuilder;
     private final Merger<K, Long> countMerger = (aggKey, aggOne, aggTwo) -> aggOne + aggTwo;
 
@@ -55,11 +54,9 @@ public class SessionWindowedKStreamImpl<K, V> extends AbstractStream<K> implemen
                                final Serde<V> valSerde,
                                final GroupedStreamAggregateBuilder<K, V> aggregateBuilder,
                                final StreamsGraphNode streamsGraphNode) {
-        super(builder, name, sourceNodes, streamsGraphNode);
+        super(name, keySerde, valSerde, sourceNodes, streamsGraphNode, builder);
         Objects.requireNonNull(windows, "windows can't be null");
         this.windows = windows;
-        this.keySerde = keySerde;
-        this.valSerde = valSerde;
         this.aggregateBuilder = aggregateBuilder;
     }
 
@@ -92,16 +89,17 @@ public class SessionWindowedKStreamImpl<K, V> extends AbstractStream<K> implemen
         }
 
         return aggregateBuilder.build(
-            new KStreamSessionWindowAggregate<>(
-                windows, materializedInternal.storeName(),
-                aggregateBuilder.countInitializer,
-                aggregateBuilder.countAggregator,
-                countMerger
-            ),
             AGGREGATE_NAME,
             materialize(materializedInternal),
-            materializedInternal.isQueryable()
-        );
+            new KStreamSessionWindowAggregate<>(
+                windows,
+                materializedInternal.storeName(),
+                aggregateBuilder.countInitializer,
+                aggregateBuilder.countAggregator,
+                countMerger),
+            materializedInternal.isQueryable(),
+            materializedInternal.keySerde() != null ? new WindowedSerdes.SessionWindowedSerde<>(materializedInternal.keySerde()) : null,
+            materializedInternal.valueSerde());
     }
 
     @Override
@@ -125,6 +123,8 @@ public class SessionWindowedKStreamImpl<K, V> extends AbstractStream<K> implemen
         }
 
         return aggregateBuilder.build(
+            REDUCE_NAME,
+            materialize(materializedInternal),
             new KStreamSessionWindowAggregate<>(
                 windows,
                 materializedInternal.storeName(),
@@ -132,10 +132,9 @@ public class SessionWindowedKStreamImpl<K, V> extends AbstractStream<K> implemen
                 reduceAggregator,
                 mergerForAggregator(reduceAggregator)
             ),
-            REDUCE_NAME,
-            materialize(materializedInternal),
-            materializedInternal.isQueryable()
-        );
+            materializedInternal.isQueryable(),
+            materializedInternal.keySerde() != null ? new WindowedSerdes.SessionWindowedSerde<>(materializedInternal.keySerde()) : null,
+            materializedInternal.valueSerde());
     }
 
     @Override
@@ -160,26 +159,41 @@ public class SessionWindowedKStreamImpl<K, V> extends AbstractStream<K> implemen
         if (materializedInternal.keySerde() == null) {
             materializedInternal.withKeySerde(keySerde);
         }
+
         return aggregateBuilder.build(
+            AGGREGATE_NAME,
+            materialize(materializedInternal),
             new KStreamSessionWindowAggregate<>(
                 windows,
                 materializedInternal.storeName(),
                 initializer,
                 aggregator,
-                sessionMerger
-            ),
-            AGGREGATE_NAME,
-            materialize(materializedInternal),
-            materializedInternal.isQueryable()
-        );
+                sessionMerger),
+            materializedInternal.isQueryable(),
+            materializedInternal.keySerde() != null ? new WindowedSerdes.SessionWindowedSerde<>(materializedInternal.keySerde()) : null,
+            materializedInternal.valueSerde());
     }
 
+    @SuppressWarnings("deprecation") // continuing to support SessionWindows#maintainMs in fallback mode
     private <VR> StoreBuilder<SessionStore<K, VR>> materialize(final MaterializedInternal<K, VR, SessionStore<Bytes, byte[]>> materialized) {
         SessionBytesStoreSupplier supplier = (SessionBytesStoreSupplier) materialized.storeSupplier();
         if (supplier == null) {
+            // NOTE: in the future, when we remove Windows#maintainMs(), we should set the default retention
+            // to be (windows.inactivityGap() + windows.grace()). This will yield the same default behavior.
+            final long retentionPeriod = materialized.retention() != null ? materialized.retention().toMillis() : windows.maintainMs();
+
+            if ((windows.inactivityGap() + windows.gracePeriodMs()) > retentionPeriod) {
+                throw new IllegalArgumentException("The retention period of the session store "
+                                                       + materialized.storeName()
+                                                       + " must be no smaller than the session inactivity gap plus the"
+                                                       + " grace period."
+                                                       + " Got gap=[" + windows.inactivityGap() + "],"
+                                                       + " grace=[" + windows.gracePeriodMs() + "],"
+                                                       + " retention=[" + retentionPeriod + "]");
+            }
             supplier = Stores.persistentSessionStore(
                 materialized.storeName(),
-                windows.maintainMs()
+                retentionPeriod
             );
         }
         final StoreBuilder<SessionStore<K, VR>> builder = Stores.sessionStoreBuilder(

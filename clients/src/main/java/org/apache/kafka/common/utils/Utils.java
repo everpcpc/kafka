@@ -68,6 +68,8 @@ public final class Utils {
     // IPv6 is supported with [ip] pattern
     private static final Pattern HOST_PORT_PATTERN = Pattern.compile(".*?\\[?([0-9a-zA-Z\\-%._:]*)\\]?:([0-9]+)");
 
+    private static final Pattern VALID_HOST_CHARACTERS = Pattern.compile("([0-9a-zA-Z\\-%._:]*)");
+
     // Prints up to 2 decimal digits. Used for human readable printing
     private static final DecimalFormat TWO_DIGIT_FORMAT = new DecimalFormat("0.##");
 
@@ -436,6 +438,15 @@ public final class Utils {
     }
 
     /**
+     * Basic validation of the supplied address. checks for valid characters
+     * @param address hostname string to validate
+     * @return true if address contains valid characters
+     */
+    public static boolean validHostPattern(String address) {
+        return VALID_HOST_CHARACTERS.matcher(address).matches();
+    }
+
+    /**
      * Formats hostname and port number as a "host:port" address string,
      * surrounding IPv6 addresses with braces '[', ']'
      * @param host hostname
@@ -761,7 +772,7 @@ public final class Utils {
      * @return
      */
     public static <T> List<T> safe(List<T> other) {
-        return other == null ? Collections.<T>emptyList() : other;
+        return other == null ? Collections.emptyList() : other;
     }
 
    /**

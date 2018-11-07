@@ -39,6 +39,7 @@ import java.util.HashSet;
 import java.util.Properties;
 import java.util.Set;
 
+import static java.time.Duration.ofMillis;
 import static org.junit.Assert.assertEquals;
 
 public class KStreamKStreamLeftJoinTest {
@@ -48,7 +49,7 @@ public class KStreamKStreamLeftJoinTest {
 
     private final Consumed<Integer, String> consumed = Consumed.with(Serdes.Integer(), Serdes.String());
     private final ConsumerRecordFactory<Integer, String> recordFactory = new ConsumerRecordFactory<>(new IntegerSerializer(), new StringSerializer());
-    private final Properties props = StreamsTestUtils.topologyTestConfig(Serdes.String(), Serdes.String());
+    private final Properties props = StreamsTestUtils.getStreamsConfig(Serdes.String(), Serdes.String());
 
     @Test
     public void testLeftJoin() {
@@ -65,7 +66,7 @@ public class KStreamKStreamLeftJoinTest {
 
         joined = stream1.leftJoin(stream2,
                                   MockValueJoiner.TOSTRING_JOINER,
-                                  JoinWindows.of(100),
+                                  JoinWindows.of(ofMillis(100)),
                                   Joined.with(Serdes.Integer(), Serdes.String(), Serdes.String()));
         joined.process(supplier);
 
@@ -151,7 +152,7 @@ public class KStreamKStreamLeftJoinTest {
 
         joined = stream1.leftJoin(stream2,
                                   MockValueJoiner.TOSTRING_JOINER,
-                                  JoinWindows.of(100),
+                                  JoinWindows.of(ofMillis(100)),
                                   Joined.with(Serdes.Integer(), Serdes.String(), Serdes.String()));
         joined.process(supplier);
 

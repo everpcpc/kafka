@@ -16,11 +16,13 @@
  */
 package org.apache.kafka.streams.kstream.internals;
 
+import org.apache.kafka.common.metrics.Sensor;
 import org.apache.kafka.streams.kstream.Aggregator;
 import org.apache.kafka.streams.kstream.Initializer;
 import org.apache.kafka.streams.kstream.Window;
 import org.apache.kafka.streams.kstream.Windowed;
 import org.apache.kafka.streams.kstream.Windows;
+import org.apache.kafka.streams.kstream.internals.metrics.Sensors;
 import org.apache.kafka.streams.processor.AbstractProcessor;
 import org.apache.kafka.streams.processor.Processor;
 import org.apache.kafka.streams.processor.ProcessorContext;
@@ -42,10 +44,10 @@ public class KStreamWindowAggregate<K, V, Agg, W extends Window> implements KStr
 
     private boolean sendOldValues = false;
 
-    KStreamWindowAggregate(final Windows<W> windows,
-                           final String storeName,
-                           final Initializer<Agg> initializer,
-                           final Aggregator<? super K, ? super V, Agg> aggregator) {
+    public KStreamWindowAggregate(final Windows<W> windows,
+                                  final String storeName,
+                                  final Initializer<Agg> initializer,
+                                  final Aggregator<? super K, ? super V, Agg> aggregator) {
         this.windows = windows;
         this.storeName = storeName;
         this.initializer = initializer;
@@ -55,6 +57,10 @@ public class KStreamWindowAggregate<K, V, Agg, W extends Window> implements KStr
     @Override
     public Processor<K, V> get() {
         return new KStreamWindowAggregateProcessor();
+    }
+
+    public Windows<W> windows() {
+        return windows;
     }
 
     @Override
@@ -68,14 +74,17 @@ public class KStreamWindowAggregate<K, V, Agg, W extends Window> implements KStr
         private TupleForwarder<Windowed<K>, Agg> tupleForwarder;
         private StreamsMetricsImpl metrics;
         private InternalProcessorContext internalProcessorContext;
+        private Sensor lateRecordDropSensor;
 
         @SuppressWarnings("unchecked")
         @Override
         public void init(final ProcessorContext context) {
             super.init(context);
-            this.internalProcessorContext = (InternalProcessorContext) context;
+            internalProcessorContext = (InternalProcessorContext) context;
 
             metrics = (StreamsMetricsImpl) context.metrics();
+
+            lateRecordDropSensor = Sensors.lateRecordDropSensor(internalProcessorContext);
 
             windowStore = (WindowStore<K, Agg>) context.getStateStore(storeName);
             tupleForwarder = new TupleForwarder<>(windowStore, context, new ForwardingCacheFlushListener<Windowed<K>, V>(context, sendOldValues), sendOldValues);
@@ -83,8 +92,6 @@ public class KStreamWindowAggregate<K, V, Agg, W extends Window> implements KStr
 
         @Override
         public void process(final K key, final V value) {
-            // if the key is null, we do not need proceed aggregating the record
-            // the record with the table
             if (key == null) {
                 log.warn(
                     "Skipping record due to null key. value=[{}] topic=[{}] partition=[{}] offset=[{}]",
@@ -96,14 +103,15 @@ public class KStreamWindowAggregate<K, V, Agg, W extends Window> implements KStr
 
             // first get the matching windows
             final long timestamp = context().timestamp();
-            final long expiryTime = internalProcessorContext.streamTime() - windows.maintainMs();
+            final long closeTime = internalProcessorContext.streamTime() - windows.gracePeriodMs();
 
             final Map<Long, W> matchedWindows = windows.windowsFor(timestamp);
 
             // try update the window, and create the new window for the rest of unmatched window that do not exist yet
             for (final Map.Entry<Long, W> entry : matchedWindows.entrySet()) {
                 final Long windowStart = entry.getKey();
-                if (windowStart > expiryTime) {
+                final long windowEnd = entry.getValue().end();
+                if (windowEnd > closeTime) {
                     Agg oldAgg = windowStore.fetch(key, windowStart);
 
                     if (oldAgg == null) {
@@ -116,11 +124,11 @@ public class KStreamWindowAggregate<K, V, Agg, W extends Window> implements KStr
                     windowStore.put(key, newAgg, windowStart);
                     tupleForwarder.maybeForward(new Windowed<>(key, entry.getValue()), newAgg, oldAgg);
                 } else {
-                    log.warn(
-                        "Skipping record for expired window. key=[{}] topic=[{}] partition=[{}] offset=[{}] timestamp=[{}] window=[{}] expiration=[{}]",
-                        key, context().topic(), context().partition(), context().offset(), context().timestamp(), windowStart, expiryTime
+                    log.debug(
+                        "Skipping record for expired window. key=[{}] topic=[{}] partition=[{}] offset=[{}] timestamp=[{}] window=[{},{}) expiration=[{}]",
+                        key, context().topic(), context().partition(), context().offset(), context().timestamp(), windowStart, windowEnd, closeTime
                     );
-                    metrics.skippedRecordsSensor().record();
+                    lateRecordDropSensor.record();
                 }
             }
         }

@@ -46,6 +46,18 @@ public class OptimizableRepartitionNode<K, V> extends BaseRepartitionNode {
 
     }
 
+    public Serde<K> keySerde() {
+        return keySerde;
+    }
+
+    public Serde<V> valueSerde() {
+        return valueSerde;
+    }
+
+    public String repartitionTopic() {
+        return repartitionTopic;
+    }
+
     @Override
     Serializer<V> getValueSerializer() {
         return valueSerde != null ? valueSerde.serializer() : null;
