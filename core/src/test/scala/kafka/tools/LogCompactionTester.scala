@@ -32,7 +32,7 @@ import org.apache.kafka.clients.consumer.{ConsumerConfig, KafkaConsumer}
 import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
 import org.apache.kafka.common.config.TopicConfig
 import org.apache.kafka.common.serialization.{ByteArraySerializer, StringDeserializer}
-import org.apache.kafka.common.utils.Utils
+import org.apache.kafka.common.utils.{AbstractIterator, Utils}
 
 import scala.collection.JavaConverters._
 
@@ -142,7 +142,7 @@ object LogCompactionTester {
 
     try {
       val topicConfigs = Map(TopicConfig.CLEANUP_POLICY_CONFIG -> TopicConfig.CLEANUP_POLICY_COMPACT)
-      val newTopics = topics.map(name => new NewTopic(name, 1, 1).configs(topicConfigs.asJava)).asJava
+      val newTopics = topics.map(name => new NewTopic(name, 1, 1.toShort).configs(topicConfigs.asJava)).asJava
       adminClient.createTopics(newTopics).all.get
 
       var pendingTopics: Seq[String] = Seq()
@@ -199,8 +199,8 @@ object LogCompactionTester {
     }
   }
 
-  def valuesIterator(reader: BufferedReader) = {
-    new IteratorTemplate[TestRecord] {
+  def valuesIterator(reader: BufferedReader): Iterator[TestRecord] = {
+    new AbstractIterator[TestRecord] {
       def makeNext(): TestRecord = {
         var next = readNext(reader)
         while (next != null && next.delete)
@@ -210,7 +210,7 @@ object LogCompactionTester {
         else
           next
       }
-    }
+    }.asScala
   }
 
   def readNext(reader: BufferedReader): TestRecord = {

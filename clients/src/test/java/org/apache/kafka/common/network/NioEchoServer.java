@@ -28,6 +28,7 @@ import org.apache.kafka.common.security.authenticator.CredentialCache;
 import org.apache.kafka.common.security.scram.ScramCredential;
 import org.apache.kafka.common.security.scram.internals.ScramMechanism;
 import org.apache.kafka.common.utils.LogContext;
+import org.apache.kafka.common.utils.MockTime;
 import org.apache.kafka.common.utils.Time;
 import org.apache.kafka.test.TestUtils;
 
@@ -158,8 +159,10 @@ public class NioEchoServer extends Thread {
         waitForMetrics("failed-reauthentication", failedReauthentications,
                 EnumSet.of(MetricType.TOTAL, MetricType.RATE));
         waitForMetrics("successful-authentication-no-reauth", 0, EnumSet.of(MetricType.TOTAL));
-        waitForMetrics("reauthentication-latency", Math.signum(successfulReauthentications),
-                EnumSet.of(MetricType.MAX, MetricType.AVG));
+        if (!(time instanceof MockTime)) {
+            waitForMetrics("reauthentication-latency", Math.signum(successfulReauthentications),
+                    EnumSet.of(MetricType.MAX, MetricType.AVG));
+        }
     }
 
     public void verifyAuthenticationNoReauthMetric(int successfulAuthenticationNoReauths) throws InterruptedException {
@@ -179,12 +182,14 @@ public class NioEchoServer extends Thread {
             long currentElapsedMs = time.milliseconds() - startMs;
             long thisMaxWaitMs = maxAggregateWaitMs - currentElapsedMs;
             String metricName = namePrefix + metricType.metricNameSuffix();
-            if (expectedValue == 0.0)
-                assertEquals(
-                        "Metric not updated " + metricName + " expected:<" + expectedValue + "> but was:<"
-                                + metricValue(metricName) + ">",
-                        metricType == MetricType.MAX ? Double.NEGATIVE_INFINITY : 0d, metricValue(metricName), EPS);
-            else if (metricType == MetricType.TOTAL)
+            if (expectedValue == 0.0) {
+                Double expected = expectedValue;
+                if (metricType == MetricType.MAX || metricType == MetricType.AVG)
+                    expected = Double.NaN;
+
+                assertEquals("Metric not updated " + metricName + " expected:<" + expectedValue + "> but was:<"
+                    + metricValue(metricName) + ">", expected, metricValue(metricName), EPS);
+            } else if (metricType == MetricType.TOTAL)
                 TestUtils.waitForCondition(() -> Math.abs(metricValue(metricName) - expectedValue) <= EPS,
                         thisMaxWaitMs, () -> "Metric not updated " + metricName + " expected:<" + expectedValue
                                 + "> but was:<" + metricValue(metricName) + ">");
